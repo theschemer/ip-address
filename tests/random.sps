@@ -57,12 +57,12 @@
         (put-u8 p (random-integer 256))))))
 
 (check (do ((i 0 (+ i 1)))
-           ((= i 1000000) #t)
+           ((= i 10000) #t)
          (assert (string? (ipv4->string (random-bytevector 4)))))
        => #t)
 
 (check (do ((i 0 (+ i 1)))
-           ((= i 1000000) #t)
+           ((= i 10000) #t)
          (assert (string? (ipv6->string (random-bytevector 16)))))
        => #t)
 
