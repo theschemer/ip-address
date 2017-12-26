@@ -64,4 +64,5 @@ before_script:
   - eval "$(CC=gcc-4.8 INSTALL_TARGET=$HOME/opt scheme-ci-master/install-scheme.sh $SCHEME)"
 
 script:
-  - tests/uuid.sps
+  - tests/ipaddrs.sps
+  - tests/random.sps

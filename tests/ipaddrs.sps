@@ -28,11 +28,37 @@
         (ip-address)
         (struct pack))
 
+;; IPv4
+
+(check (ipv4->string (string->ipv4 "000.000.000.000")) => "0.0.0.0")
+
+(check (ipv4->string (string->ipv4 "00.00.00.00")) => "0.0.0.0")
+
+(check (ipv4->string (string->ipv4 "0.0.0.0")) => "0.0.0.0")
+
+(check (ipv4->string (string->ipv4 "0.0.0.0")) => "0.0.0.0")
+
+(check (ipv4->string (string->ipv4 "192.0.2.0")) => "192.0.2.0")
+(check (ipv4->string (string->ipv4 "198.51.100.0")) => "198.51.100.0")
+(check (ipv4->string (string->ipv4 "203.0.113.0")) => "203.0.113.0")
+
+(check (string->ipv4 "0.0.0.") => #f)
+(check (string->ipv4 "0.0..0") => #f)
+(check (string->ipv4 "0..0.0") => #f)
+(check (string->ipv4 ".0.0.0") => #f)
+
+;; IPv6
+
 (check (ipv6->string (string->ipv6 "::")) => "::")
 
 (check (ipv6->string (string->ipv6 "::1")) => "::1")
 
 (check (ipv6->string (string->ipv6 "2001:db8::")) => "2001:db8::")
+
+(check (ipv6->string (string->ipv6 "2001:DB8:A:B:C:D:E:F"))
+       => "2001:db8:a:b:c:d:e:f")
+
+(check (string->ipv6 ":") => #f)
 
 ;; Test the recommendations from RFC 5952
 (check (ipv6->string (string->ipv6 "2001:0db8::0001"))
@@ -81,5 +107,5 @@
                          (string->ipv6* (ipv6->string addr))))
       (error 'blah "blah blah blah!!" addr))))
 
-
 (check-report)
+(assert (check-passed? 23))

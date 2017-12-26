@@ -28,10 +28,7 @@
 (library (ip-address)
   (export ipv4->string string->ipv4
           ipv6->string string->ipv6)
-  (import (rnrs (6))
-          (only (srfi :13 strings) string-prefix?)
-          (struct pack)
-          (industria text strings))
+  (import (rnrs (6)))
 
   (define (ipv4->string addr)
     (call-with-string-output-port
@@ -47,33 +44,34 @@
 
   ;; Accepts leading zeros, like in: 192.000.002.000
   (define (string->ipv4 str)
-    (let-values (((o extract) (open-bytevector-output-port)))
-      (let ((i (open-string-input-port str)))
-        (define (parse-octet)
+    (let ((ret (make-bytevector 4)))
+      (let ((in (open-string-input-port str)))
+        (define (parse-octet idx)
           (let lp ((octet 0) (n 3))
-            (let ((c (lookahead-char i)))
-              (if (and (positive? n) (char? c) (char<=? #\0 c #\9))
-                  (lp (+ (* octet 10)
-                         (- (char->integer (get-char i))
-                            (char->integer #\0)))
-                      (- n 1))
-                  (cond ((and (<= 0 octet 255) (< n 3))
-                         (put-u8 o octet)
+            (let ((c (lookahead-char in)))
+              (if (and (fxpositive? n) (char? c) (char<=? #\0 c #\9))
+                  (lp (fx+ (fx* octet 10)
+                           (fx- (char->integer (get-char in))
+                                (char->integer #\0)))
+                      (fx- n 1))
+                  (cond ((and (fx<=? 0 octet 255) (fx<? n 3))
+                         (bytevector-u8-set! ret idx octet)
                          #t)
                         (else #f))))))
         (define (parse-dot)
-          (eqv? (get-char i) #\.))
-        (and (parse-octet) (parse-dot)
-             (parse-octet) (parse-dot)
-             (parse-octet) (parse-dot)
-             (parse-octet) (eof-object? (get-char i))
-             (extract)))))
+          (eqv? (get-char in) #\.))
+        (and (parse-octet 0) (parse-dot)
+             (parse-octet 1) (parse-dot)
+             (parse-octet 2) (parse-dot)
+             (parse-octet 3) (port-eof? in)
+             ret))))
 
-  (define (word i addr) (unpack "!uS" addr (fx+ i i)))
+  (define (word i addr)
+    (bytevector-u16-ref addr (fx+ i i) (endianness big)))
 
   (define (compression-index addr)
-    ;; Finds the largest span of zero words. Chooses the first span
-    ;; if two spans are of equal length.
+    ;; Finds the largest span of zero words. Chooses the first span if
+    ;; two spans are of equal length.
     (let lp ((i 0) (start -1) (len 0) (start* -1) (len* 0))
       (cond ((fx=? i 8)
              (if (fx>? len len*)
@@ -89,61 +87,82 @@
 
   ;; TODO: emit embedded IPv4 addresses
   (define (ipv6->string addr)
+    (define digits "0123456789abcdef")
     (call-with-string-output-port
       (lambda (p)
         (let-values (((cidx* clen) (compression-index addr)))
           (let ((cidx (if (fx=? clen 1) -1 cidx*)))
             (do ((i 0 (if (fx=? i cidx) (fx+ i clen) (fx+ i 1))))
                 ((fx=? i 8)
-                 (when (fx=? i (+ cidx clen)) (display #\: p)))
+                 (when (fx=? i (fx+ cidx clen))
+                   (put-char p #\:)))
               (cond ((fx=? i cidx)
-                     (display #\: p))
+                     (put-char p #\:))
                     (else
-                     (unless (fxzero? i) (put-char p #\:))
-                     (display (string-downcase
-                               (number->string (word i addr) 16))
-                              p)))))))))
+                     (unless (fxzero? i)
+                       (put-char p #\:))
+                     (let ((w (word i addr)))
+                       (let ((a (fxbit-field w 12 16))
+                             (b (fxbit-field w 8 12))
+                             (c (fxbit-field w 4 8))
+                             (d (fxbit-field w 0 4)))
+                         (when (fx>? w #xfff)
+                           (put-char p (string-ref digits a)))
+                         (when (fx>? w #xff)
+                           (put-char p (string-ref digits b)))
+                         (when (fx>? w #xf)
+                           (put-char p (string-ref digits c)))
+                         (put-char p (string-ref digits d))))))))))))
 
   ;; Returns a bytevector or #f.
   (define (string->ipv6 str)
+    (define (hexdigit ch)
+      (cond ((char<=? #\0 ch #\9)
+             (fx- (char->integer ch) (char->integer #\0)))
+            ((char<=? #\a ch #\f)
+             (fx+ 10 (fx- (char->integer ch) (char->integer #\a))))
+            ((char<=? #\A ch #\F)
+             (fx+ 10 (fx- (char->integer ch) (char->integer #\A))))
+            (else #f)))
     (define (parse str start)
       (let ((addr (make-bytevector 16 0))
             (se (string-length str)))
         (let lp ((si start) (ai 0) (nibbles 0) (cidx #f) (word 0))
-          (cond ((= si se)
-                 (cond ((positive? nibbles)
-                        ;; Trailing word
-                        (cond ((< ai 16)
-                               (pack! "!uS" addr ai word)
-                               (lp si (+ ai 2) 0 cidx 0))
-                              (else #f)))
-                       (cidx
-                        ;; The string used compression, move the words
-                        ;; to the right.
-                        (let ((didx (- 16 (- ai cidx))))
-                          (bytevector-copy! addr cidx addr didx (- ai cidx))
-                          (do ((i cidx (+ i 2)))
-                              ((= i didx) addr)
-                            (bytevector-u16-native-set! addr i 0))))
-                       ((= ai 16) addr)
-                       (else #f)))      ;too many/few words
-                ((char=? #\: (string-ref str si))
-                 (cond ((zero? nibbles)
-                        ;; Compression
-                        (and (not cidx)
-                             (lp (+ si 1) ai nibbles ai word)))
-                       ((< ai 14)
-                        (pack! "!uS" addr ai word)
-                        (lp (+ si 1) (+ ai 2) 0 cidx 0))
-                       (else #f)))      ;bad place for a colon
-                ((string->number (string (string-ref str si)) 16)
-                 => (lambda (n)
-                      (and (< nibbles 4)
-                           (lp (+ si 1) ai (+ nibbles 1) cidx
-                               (fxior n (fxarithmetic-shift-left word 4))))))
-                ;; TODO: handle embedded IPv4 addresses
-                (else #f)))))
-    (if (string-prefix? ":" str)
-        (and (string-prefix? "::" str)
+          (cond
+            ((fx=? si se)
+             (cond ((fxpositive? nibbles)
+                    ;; Trailing word
+                    (cond ((< ai 16)
+                           (bytevector-u16-set! addr ai word (endianness big))
+                           (lp si (fx+ ai 2) 0 cidx 0))
+                          (else #f)))
+                   (cidx
+                    ;; The string used compression, move the words to
+                    ;; the right.
+                    (let ((didx (fx- 16 (fx- ai cidx))))
+                      (bytevector-copy! addr cidx addr didx (fx- ai cidx))
+                      (do ((i cidx (fx+ i 2)))
+                          ((fx=? i didx) addr)
+                        (bytevector-u16-native-set! addr i 0))))
+                   ((fx=? ai 16) addr)
+                   (else #f)))      ;too many/few words
+            ((char=? #\: (string-ref str si))
+             (cond ((fxzero? nibbles)
+                    ;; Compression
+                    (and (not cidx)
+                         (lp (fx+ si 1) ai nibbles ai word)))
+                   ((fx<? ai 14)
+                    (bytevector-u16-set! addr ai word (endianness big))
+                    (lp (fx+ si 1) (fx+ ai 2) 0 cidx 0))
+                   (else #f)))      ;bad place for a colon
+            ((hexdigit (string-ref str si))
+             => (lambda (n)
+                  (and (fx<? nibbles 4)
+                       (lp (fx+ si 1) ai (fx+ nibbles 1) cidx
+                           (fxior n (fxarithmetic-shift-left word 4))))))
+            ;; TODO: handle embedded IPv4 addresses
+            (else #f)))))
+    (if (and (fx>? (string-length str) 0) (char=? (string-ref str 0) #\:))
+        (and (fx>? (string-length str) 1) (char=? (string-ref str 1) #\:)
              (parse str 1))
         (parse str 0))))
